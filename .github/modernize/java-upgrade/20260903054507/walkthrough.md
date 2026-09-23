@@ -68,3 +68,4 @@ study-agent/
   3. Tự động chia thành 5 phiên Pomodoro (4 phiên nghỉ 5p, 1 phiên nghỉ dài 15p).
   4. Lập lịch học và đặt hẹn giờ nhắc nhở qua `ScheduledExecutorService`.
   5. Dữ liệu được lưu thành công vào cơ sở dữ liệu SQLite.
+  \\ if you want to talking with me you should learn all the lession which i gave you yesterday so it had better if you construction it with machine learning and now we can showw all of them for you so why you only sleeping alone, it 
