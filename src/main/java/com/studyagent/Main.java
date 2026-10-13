@@ -35,7 +35,7 @@ public class Main {
         if (hasGeminiKey) {
             System.out.println("  • Gemini API Key     : [Đã cấu hình]");
         } else {
-            System.out.println("  • Gemini API Key     : [Chưa cấu hình] (Sẽ dùng Mock Mode)");
+            System.out.println("  • Gemini API Key     : [Chưa cấu hình] (Không thể phân tích thời khóa biểu bằng AI)");
         }
 
         DatabaseManager.initializeDatabase();
@@ -91,7 +91,7 @@ public class Main {
             } else if (cmd.equalsIgnoreCase("status")) {
                 System.out.println("📊 TRẠNG THÁI HỆ THỐNG:");
                 System.out.println("  • Telegram Bot Polling : " + (hasBotToken ? "ONLINE" : "OFFLINE"));
-                System.out.println("  • Gemini AI Engine     : " + (hasGeminiKey ? "CONNECTED" : "MOCK/FALLBACK"));
+                System.out.println("  • Gemini AI Engine     : " + (hasGeminiKey ? "CONNECTED" : "NOT CONFIGURED"));
                 System.out.println("  • SQLite Database      : CONNECTED (study_agent.db)");
                 System.out.println("  • Reminder Scheduler   : RUNNING");
             } else if (!cmd.isEmpty()) {

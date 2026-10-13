@@ -103,7 +103,7 @@ public class StudyDesktopUI extends JFrame {
         text.add(subtitle);
         header.add(text, BorderLayout.WEST);
 
-        JLabel mode = new JLabel(geminiService.hasApiKey() ? "AI GEMINI" : "MOCK MODE");
+        JLabel mode = new JLabel(geminiService.hasApiKey() ? "AI GEMINI" : "API KEY REQUIRED");
         mode.setOpaque(true);
         mode.setBackground(geminiService.hasApiKey() ? new Color(216, 244, 229) : new Color(255, 238, 197));
         mode.setForeground(new Color(45, 75, 75));
@@ -257,6 +257,9 @@ public class StudyDesktopUI extends JFrame {
             protected AnalysisResult doInBackground() throws Exception {
                 List<TimetableEntry> entries = loader.load();
                 if (entries == null || entries.isEmpty()) {
+                    if (!geminiService.hasApiKey()) {
+                        throw new IllegalStateException("Chưa cấu hình Gemini API key. Hãy thêm key vào config.properties (gemini.api.key) hoặc biến môi trường GEMINI_API_KEY rồi thử lại.");
+                    }
                     throw new IllegalStateException("Không tìm thấy buổi học nào trong dữ liệu đầu vào.");
                 }
                 repository.saveTimetableEntries(DESKTOP_CHAT_ID, entries);

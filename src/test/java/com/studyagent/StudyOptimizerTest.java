@@ -46,4 +46,46 @@ public class StudyOptimizerTest {
         List<StudySession> sessions = optimizer.generateOptimalSchedule(entries);
         assertEquals(0, sessions.size(), "Phải loại bỏ phiên tự học trùng giờ với buổi học trên trường");
     }
+
+    @Test
+    public void testTimetableExtractionDoesNotReturnMockWithoutApiKey() {
+        GeminiService geminiService = new GeminiService("");
+
+        List<TimetableEntry> textEntries = geminiService.extractTimetableFromText("Thứ 2 7h-9h Python");
+        assertFalse(textEntries.isEmpty());
+        assertEquals("Python", textEntries.get(0).getSubjectName());
+        assertTrue(geminiService.extractTimetableFromImage(new byte[0], "image/jpeg").isEmpty());
+    }
+
+    @Test
+    public void testFallbackParsesTimetableTextWithMultipleDaysAndSubjects() {
+        GeminiService geminiService = new GeminiService("valid-key");
+        String input = "thứ 2: sáng 7h-9h lập trình hướng đối tượng, 9h-12h cơ sở dữ liệu, chiều 16h-19h python; thứ 3: sáng 7h-9h hệ điều hành, 9h-12h mạng máy tính";
+
+        List<TimetableEntry> entries = geminiService.extractTimetableFromText(input);
+
+        assertNotNull(entries);
+        assertEquals(5, entries.size());
+        assertEquals("Thứ 2", entries.get(0).getDayOfWeek());
+        assertTrue(entries.get(0).getSubjectName().toLowerCase().contains("lập trình"));
+        assertTrue(entries.get(2).getSubjectName().toLowerCase().contains("python"));
+        assertEquals("Thứ 3", entries.get(3).getDayOfWeek());
+        assertTrue(entries.get(3).getSubjectName().toLowerCase().contains("hệ điều hành"));
+    }
+
+    @Test
+    public void testFallbackParsesNewlineSeparatedDaysWithoutForcingThứ2() {
+        GeminiService geminiService = new GeminiService("valid-key");
+        String input = "thứ 2: sáng 7h-9h lập trình hướng đối tượng\n" +
+                "thứ 3: sáng 7h-9h hệ điều hành\n" +
+                "thứ 4: sáng 7h-9h tiếng anh";
+
+        List<TimetableEntry> entries = geminiService.extractTimetableFromText(input);
+
+        assertNotNull(entries);
+        assertEquals(3, entries.size());
+        assertEquals("Thứ 2", entries.get(0).getDayOfWeek());
+        assertEquals("Thứ 3", entries.get(1).getDayOfWeek());
+        assertEquals("Thứ 4", entries.get(2).getDayOfWeek());
+    }
 }

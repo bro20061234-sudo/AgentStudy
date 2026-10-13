@@ -59,7 +59,11 @@ public class StudyBotController implements TelegramBotClient.TelegramUpdateListe
 
     private void processTimetableEntries(long chatId, List<TimetableEntry> entries) {
         if (entries == null || entries.isEmpty()) {
-            botClient.sendMessage(chatId, "⚠️ Không tìm thấy môn học nào trong thời khóa biểu. Vui lòng gửi lại ảnh rõ nét hơn hoặc nhập văn bản rõ ràng nhé!");
+            if (!geminiService.hasApiKey()) {
+                botClient.sendMessage(chatId, "⚠️ Chưa cấu hình Gemini API key. Hãy thêm key vào config.properties (gemini.api.key) hoặc biến môi trường GEMINI_API_KEY rồi thử lại.");
+            } else {
+                botClient.sendMessage(chatId, "⚠️ Không tìm thấy môn học nào trong thời khóa biểu. Vui lòng gửi lại ảnh rõ nét hơn hoặc nhập văn bản rõ ràng nhé!");
+            }
             return;
         }
 

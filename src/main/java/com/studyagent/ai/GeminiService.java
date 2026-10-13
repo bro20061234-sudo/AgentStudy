@@ -16,12 +16,14 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class GeminiService {
     private final String apiKey;
     private final HttpClient httpClient;
     private final Gson gson;
-    private static final String MODEL_NAME = "gemini-2.5-flash";
+    private static final String MODEL_NAME = "gemini-3.8-flash";
 
     public GeminiService(String apiKey) {
         this.apiKey = apiKey != null ? apiKey.trim() : "";
@@ -34,8 +36,14 @@ public class GeminiService {
     }
 
     public List<TimetableEntry> extractTimetableFromText(String textInput) {
+        if (textInput == null || textInput.isBlank()) {
+            return new ArrayList<>();
+        }
+
+        List<TimetableEntry> fallbackEntries = parseTimetableTextFallback(textInput);
         if (!hasApiKey()) {
-            return generateMockTimetable("Mock Mode (chưa có Gemini API Key)");
+            System.err.println("⚠️ [GeminiService] Chưa cấu hình Gemini API key; dùng phân tích dự phòng cho thời khóa biểu.");
+            return fallbackEntries;
         }
 
         String prompt = "Bạn là trợ lý học tập thông minh. Hãy trích xuất toàn bộ thời khóa biểu từ văn bản sau thành một JSON Array hợp lệ.\n" +
@@ -57,16 +65,22 @@ public class GeminiService {
             String jsonPayload = buildTextPayload(prompt);
             String responseBody = callGeminiApi(jsonPayload);
             String extractedText = parseGeminiResponseText(responseBody);
-            return parseTimetableJson(extractedText);
+            List<TimetableEntry> extractedEntries = parseTimetableJson(extractedText);
+            if (extractedEntries != null && !extractedEntries.isEmpty()) {
+                return extractedEntries;
+            }
+            System.err.println("⚠️ [GeminiService] Gemini trả về dữ liệu rỗng; dùng fallback parser cho input lịch học.");
+            return fallbackEntries;
         } catch (Exception e) {
-            System.err.println("⚠️ [GeminiService] Lỗi gọi Gemini: " + e.getMessage());
-            return generateMockTimetable("Fallback: Lỗi kết nối AI");
+            System.err.println("⚠️ [GeminiService] Lỗi gọi Gemini: " + e.getMessage() + ". Dùng parser dự phòng.");
+            return fallbackEntries;
         }
     }
 
     public List<TimetableEntry> extractTimetableFromImage(byte[] imageBytes, String mimeType) {
         if (!hasApiKey()) {
-            return generateMockTimetable("Ảnh TKB (Mock Mode do chưa có Gemini API Key)");
+            System.err.println("⚠️ [GeminiService] Chưa cấu hình Gemini API key; bỏ qua phân tích ảnh thời khóa biểu.");
+            return new ArrayList<>();
         }
 
         String prompt = "Bạn là trợ lý học tập AI. Hãy đọc kỹ ảnh chụp bảng thời khóa biểu này và trích xuất tất cả các buổi học.\n" +
@@ -90,7 +104,7 @@ public class GeminiService {
             return parseTimetableJson(extractedText);
         } catch (Exception e) {
             System.err.println("⚠️ [GeminiService] Lỗi Vision Gemini: " + e.getMessage());
-            return generateMockTimetable("Fallback: Lỗi phân tích ảnh");
+            return new ArrayList<>();
         }
     }
 
@@ -241,6 +255,105 @@ public class GeminiService {
         else if (s.startsWith("```")) s = s.substring(3);
         if (s.endsWith("```")) s = s.substring(0, s.length() - 3);
         return s.trim();
+    }
+
+    private List<TimetableEntry> parseTimetableTextFallback(String input) {
+        List<TimetableEntry> entries = new ArrayList<>();
+        String normalized = input.replace("\n", " ").replace("\r", " ").replace("\t", " ");
+        normalized = normalized.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) {
+            return entries;
+        }
+
+        Pattern dayLabelPattern = Pattern.compile("(?i)(?:thứ|thu)\\s*(\\d+)\\s*:");
+        Matcher dayLabelMatcher = dayLabelPattern.matcher(normalized);
+
+        List<Integer> dayStarts = new ArrayList<>();
+        List<Integer> dayEnds = new ArrayList<>();
+        List<String> dayNames = new ArrayList<>();
+        while (dayLabelMatcher.find()) {
+            dayStarts.add(dayLabelMatcher.start());
+            dayEnds.add(dayLabelMatcher.end());
+            dayNames.add("Thứ " + dayLabelMatcher.group(1).trim());
+        }
+
+        if (dayStarts.isEmpty()) {
+            String[] dayChunks = normalized.split("(?i)\\s*;\\s*");
+            for (String chunk : dayChunks) {
+                String trimmedChunk = chunk.trim();
+                if (trimmedChunk.isEmpty()) {
+                    continue;
+                }
+                parseSessionsFromChunk(trimmedChunk, "Thứ 2", entries);
+            }
+            return entries;
+        }
+
+        for (int i = 0; i < dayStarts.size(); i++) {
+            int blockStart = dayEnds.get(i);
+            int blockEnd = (i + 1 < dayStarts.size()) ? dayStarts.get(i + 1) : normalized.length();
+            String chunk = normalized.substring(blockStart, blockEnd).trim();
+            if (!chunk.isEmpty()) {
+                parseSessionsFromChunk(chunk, dayNames.get(i), entries);
+            }
+        }
+
+        return entries;
+    }
+
+    private void parseSessionsFromChunk(String chunk, String dayOfWeek, List<TimetableEntry> entries) {
+        Pattern sessionPattern = Pattern.compile("(?i)(?:sáng|chiều|tối|buổi)?\\s*(\\d{1,2})\\s*h\\s*(?:-|đến|to)\\s*(\\d{1,2})\\s*h\\s*([^,;]+)");
+        Matcher sessionMatcher = sessionPattern.matcher(chunk);
+
+        while (sessionMatcher.find()) {
+            String startText = sessionMatcher.group(1).trim();
+            String endText = sessionMatcher.group(2).trim();
+            String subject = sessionMatcher.group(3).trim();
+            subject = subject.replaceAll("(?i)^(?:sáng|chiều|tối|buổi)\\s*", "").trim();
+            subject = subject.replaceAll("(?i)(?:phòng.*$|room.*$|p\\..*$)", "").trim();
+            subject = subject.replaceAll("[;,]$", "").trim();
+            if (subject.isEmpty()) {
+                subject = "Chưa rõ môn";
+            }
+
+            TimetableEntry entry = new TimetableEntry();
+            entry.setDayOfWeek(dayOfWeek);
+            entry.setStartTime(String.format("%02d:00", Integer.parseInt(startText)));
+            entry.setEndTime(String.format("%02d:00", Integer.parseInt(endText)));
+            entry.setSubjectName(capitalizeSubject(subject));
+            entry.setRoom("N/A");
+            entry.setNote("");
+            entries.add(entry);
+        }
+    }
+
+    private String normalizeHour(String hourText) {
+        int hour = Integer.parseInt(hourText.trim());
+        return String.format("%02d:00", Math.min(Math.max(hour, 0), 23));
+    }
+
+    private String capitalizeSubject(String subject) {
+        if (subject == null) {
+            return "Chưa rõ môn";
+        }
+        String text = subject.trim();
+        if (text.isEmpty()) {
+            return "Chưa rõ môn";
+        }
+        text = text.replaceAll("\\s+", " ");
+        String[] words = text.split(" ");
+        StringBuilder result = new StringBuilder();
+        for (String word : words) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            if (word.equalsIgnoreCase("và") || word.equalsIgnoreCase("của") || word.equalsIgnoreCase("với")) {
+                result.append(word.toLowerCase()).append(" ");
+            } else {
+                result.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1).toLowerCase()).append(" ");
+            }
+        }
+        return result.toString().trim();
     }
 
     private List<TimetableEntry> parseTimetableJson(String jsonText) {
