@@ -24,6 +24,7 @@ public class TelegramBotClient {
     public interface TelegramUpdateListener {
         void onTextMessage(long chatId, String userName, String text);
         void onPhotoMessage(long chatId, String userName, byte[] photoBytes, String caption);
+        void onDocumentMessage(long chatId, String userName, String fileName, byte[] docBytes);
     }
 
     public TelegramBotClient(String botToken) {
@@ -113,6 +114,14 @@ public class TelegramBotClient {
                 if (photoBytes != null && listener != null) {
                     listener.onPhotoMessage(chatId, userName, photoBytes, caption);
                 }
+            }
+        } else if (message.has("document")) {
+            JsonObject docObj = message.getAsJsonObject("document");
+            String fileId = docObj.get("file_id").getAsString();
+            String fileName = docObj.has("file_name") ? docObj.get("file_name").getAsString() : "document.pdf";
+            byte[] docBytes = downloadFile(fileId);
+            if (docBytes != null && listener != null) {
+                listener.onDocumentMessage(chatId, userName, fileName, docBytes);
             }
         }
     }

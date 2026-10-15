@@ -11,6 +11,8 @@ public class StudySession {
     private String topicOverview;
     private String preparationMaterials;
     private boolean isReminded;
+    private boolean isCompleted;
+    private int sessionIndex;
 
     public StudySession() {}
 
@@ -22,6 +24,7 @@ public class StudySession {
         this.topicOverview = topicOverview;
         this.preparationMaterials = preparationMaterials;
         this.isReminded = false;
+        this.isCompleted = false;
     }
 
     public String getId() { return id; }
@@ -53,6 +56,12 @@ public class StudySession {
 
     public boolean isReminded() { return isReminded; }
     public void setReminded(boolean reminded) { isReminded = reminded; }
+
+    public boolean isCompleted() { return isCompleted; }
+    public void setCompleted(boolean completed) { isCompleted = completed; }
+
+    public int getSessionIndex() { return sessionIndex; }
+    public void setSessionIndex(int sessionIndex) { this.sessionIndex = sessionIndex; }
 
     @Override
     public String toString() {

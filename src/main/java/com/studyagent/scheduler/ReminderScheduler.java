@@ -81,15 +81,28 @@ public class ReminderScheduler {
         }
 
         sb.append(String.format("⏰ *Thời gian:* %s - %s (%s)\n\n", session.getStartTime(), session.getEndTime(), session.getDayOfWeek()));
-        sb.append("🎯 *Mục tiêu & Đề cương buổi học hôm nay:*\n");
-        sb.append(session.getTopicOverview()).append("\n\n");
+        List<com.studyagent.model.WeeklyCurriculum> curricula = repository.getWeeklyCurricula(session.getChatId(), session.getSubjectName());
+        if (!curricula.isEmpty()) {
+            sb.append("📑 *ĐỀ CƯƠNG BUỔI HỌC:*\n");
+            com.studyagent.model.WeeklyCurriculum currentWeekPlan = curricula.stream()
+                    .filter(plan -> plan.getWeekNumber() == session.getSessionIndex())
+                    .findFirst()
+                    .orElse(curricula.get(0));
+            sb.append(String.format("📌 *%s:*\n%s\n\n", currentWeekPlan.getChapterTitle(), currentWeekPlan.getDetailedSyllabus()));
+        } else {
+            sb.append("🎯 *Mục tiêu & Đề cương buổi học:*\n");
+            sb.append(session.getTopicOverview()).append("\n\n");
+        }
 
         if (session.getPreparationMaterials() != null && !session.getPreparationMaterials().isEmpty()) {
             sb.append("📖 *Tài liệu & Bài tập cần chuẩn bị:*\n");
             sb.append(session.getPreparationMaterials()).append("\n\n");
         }
 
-        sb.append("🍅 *Mẹo Pomodoro:* Học tập trung 25 phút, nghỉ 5 phút. Hãy tắt thông báo và bắt đầu ngay nhé!");
+        sb.append("💡 *TIẾN TRÌNH CA HỌC ĐỀ XUẤT:*\n");
+        sb.append("• 🟡 *Bắt đầu ca:* Gõ `/quiz ").append(session.getSubjectName()).append("` để làm 3 câu ôn tập bài cũ.\n");
+        sb.append("• 🍅 *Trong ca:* Học tập trung 25 phút Pomodoro.\n");
+        sb.append("• 🟢 *Cuối ca:* Làm câu hỏi củng cố bài mới hoặc gõ `/contest ").append(session.getSubjectName()).append("` để thi trắc nghiệm chấm điểm!\n");
 
         botClient.sendMessage(session.getChatId(), sb.toString());
         System.out.printf("🔔 [ReminderScheduler] Đã gửi thông báo nhắc học môn \"%s\" tới chat_id %d.%n", session.getSubjectName(), session.getChatId());
