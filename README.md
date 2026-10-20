@@ -102,6 +102,16 @@ Dự án môn **Lập trình Hướng đối tượng (OOP - Java)** dành cho n
 
 ## 🚀 Hướng dẫn Chạy & Build Dự án
 
+### Cấu hình Gemini API Key
+
+Để phân tích thời khóa biểu bằng AI, hãy tạo API key tại [Google AI Studio](https://aistudio.google.com), sau đó thay `YOUR_GEMINI_API_KEY` trong `config.properties`:
+
+```properties
+gemini.api.key=YOUR_ACTUAL_GEMINI_API_KEY
+```
+
+Không để nguyên giá trị mẫu. Có thể thay bằng biến môi trường `GEMINI_API_KEY`; biến môi trường sẽ được ưu tiên hơn giá trị trong file. Khởi động lại ứng dụng sau khi cập nhật cấu hình. Không chia sẻ hoặc đưa API key lên Git.
+
 ### 1. Mở trong IDE (IntelliJ IDEA / Eclipse / VS Code)
 
 ### 2. Chạy trực tiếp từ dòng lệnh (Không cần Maven)
