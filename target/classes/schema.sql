@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS study_sessions (
     topic_overview TEXT,
     preparation_materials TEXT,
     is_reminded INTEGER DEFAULT 0,
+    is_completed INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS textbooks (
+    id TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    subject_name TEXT NOT NULL,
+    file_name TEXT,
+    content TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -65,4 +75,37 @@ CREATE TABLE IF NOT EXISTS syllabuses (
     exam_tips TEXT,
     recommended_materials TEXT,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS weekly_curricula (
+    id TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    subject_name TEXT NOT NULL,
+    week_number INTEGER NOT NULL,
+    chapter_title TEXT NOT NULL,
+    detailed_syllabus TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS quiz_questions (
+    id TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    subject_name TEXT NOT NULL,
+    week_number INTEGER DEFAULT 1,
+    phase TEXT NOT NULL, -- 'START_SESSION' (đầu ca: ôn bài cũ), 'END_SESSION' (cuối ca: ôn bài mới), 'CONTEST'
+    question TEXT NOT NULL,
+    options_json TEXT NOT NULL, -- JSON array ["A. ...", "B. ...", "C. ...", "D. ..."]
+    correct_answer TEXT NOT NULL, -- e.g. "A"
+    explanation TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+    id TEXT PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    subject_name TEXT NOT NULL,
+    quiz_type TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    total_questions INTEGER NOT NULL,
+    completed_at TEXT NOT NULL
 );

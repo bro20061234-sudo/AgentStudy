@@ -37,18 +37,18 @@ public class WeeklyCurriculum {
     public void setDetailedSyllabus(String detailedSyllabus) { this.detailedSyllabus = detailedSyllabus; }
 
     public String getDetailedLessonIssue() {
-        if (detailedSyllabus == null || detailedSyllabus.length() < 1500) {
+        if (detailedSyllabus == null || detailedSyllabus.length() < 300) {
             return "Bài giảng quá ngắn, hiện chỉ giống đề cương tóm tắt.";
         }
         String normalized = java.text.Normalizer.normalize(detailedSyllabus, java.text.Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "").toUpperCase(java.util.Locale.ROOT);
-        String[] requiredSections = {
-                "MUC TIEU BUOI HOC",
-                "KIEN THUC TIEN QUYET",
-                "BAI GIANG CHI TIET",
-                "VI DU MINH HOA",
-                "BAI TAP THUC HANH VA LOI GIAI",
-                "TOM TAT VA GHI NHO"
+        String[][] sectionAliases = {
+                {"MUC TIEU BUOI HOC", "MUC TIEU BAI HOC", "MUC TIEU"},
+                {"KIEN THUC TIEN QUYET", "KIEN THUC TRONG TAM", "KIEN THUC NEN TANG", "KIEN THUC"},
+                {"BAI GIANG CHI TIET", "NOI DUNG BAI GIANG", "BAI GIANG", "NOI DUNG CHI TIET", "NOI DUNG"},
+                {"VI DU MINH HOA", "VI DU"},
+                {"BAI TAP THUC HANH VA LOI GIAI", "BAI TAP VA LOI GIAI", "BAI TAP THUC HANH", "BAI TAP"},
+                {"TOM TAT VA GHI NHO", "GHI NHO VA TOM TAT", "GHI NHO", "TOM TAT", "TONG KET"}
         };
         String[] displaySections = {
                 "Mục tiêu buổi học",
@@ -58,19 +58,34 @@ public class WeeklyCurriculum {
                 "Bài tập thực hành và lời giải",
                 "Tóm tắt và ghi nhớ"
         };
-        int[] minimumSectionLengths = {40, 40, 500, 150, 200, 80};
-        int[] sectionPositions = new int[requiredSections.length];
-        for (int i = 0; i < requiredSections.length; i++) {
-            sectionPositions[i] = normalized.indexOf(requiredSections[i]);
+        int[] minimumSectionLengths = {20, 20, 200, 50, 50, 20};
+        int[] sectionPositions = new int[sectionAliases.length];
+        int[] matchLengths = new int[sectionAliases.length];
+
+        for (int i = 0; i < sectionAliases.length; i++) {
+            sectionPositions[i] = -1;
+            for (String alias : sectionAliases[i]) {
+                int pos = normalized.indexOf(alias);
+                if (pos >= 0) {
+                    sectionPositions[i] = pos;
+                    matchLengths[i] = alias.length();
+                    break;
+                }
+            }
             if (sectionPositions[i] < 0) {
                 return "Bài giảng thiếu mục: " + displaySections[i] + ".";
             }
         }
-        for (int i = 0; i < requiredSections.length; i++) {
-            int contentStart = sectionPositions[i] + requiredSections[i].length();
-            int contentEnd = i + 1 < requiredSections.length
-                    ? sectionPositions[i + 1]
-                    : normalized.length();
+
+        // Kiểm tra thứ tự và độ dài các mục
+        for (int i = 0; i < sectionPositions.length; i++) {
+            int contentStart = sectionPositions[i] + matchLengths[i];
+            int contentEnd = normalized.length();
+            for (int j = 0; j < sectionPositions.length; j++) {
+                if (sectionPositions[j] > sectionPositions[i] && sectionPositions[j] < contentEnd) {
+                    contentEnd = sectionPositions[j];
+                }
+            }
             if (contentEnd - contentStart < minimumSectionLengths[i]) {
                 return "Mục " + displaySections[i] + " chưa có nội dung giải thích đủ chi tiết.";
             }

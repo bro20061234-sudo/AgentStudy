@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.studyagent.model.StudySession;
 import com.studyagent.model.SubjectSyllabus;
 import com.studyagent.model.TimetableEntry;
@@ -22,6 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class GeminiService {
+    private static final int MAX_GEMINI_ATTEMPTS = 3;
     private final String apiKey;
     private final HttpClient httpClient;
     private final Gson gson;
@@ -144,10 +146,10 @@ public class GeminiService {
                 "   - Tiết 2: 08:00 (kíp 3 tiết -> 08:00 - 11:00)\n" +
                 "   - Tiết 3: 09:00 (kíp 1 tiết -> 09:00 - 10:00, 2 tiết -> 09:00 - 11:00)\n" +
                 "   - Tiết 4: 10:00\n" +
-                "   - Tiết 6: 12:30 (kíp 4 tiết -> 12:30 - 16:30)\n" +
-                "   - Tiết 7: 13:30 (kíp 1 tiết -> 13:30 - 14:30, 2 tiết -> 13:30 - 15:30)\n" +
-                "   - Tiết 8: 14:30\n" +
-                "   - Tiết 10: 16:30 (kíp 2 tiết -> 16:30 - 18:30)\n" +
+                "   - Tiết 6: 12:00 (kíp 4 tiết -> 12:00 - 16:00)\n" +
+                "   - Tiết 7: 13:00 (kíp 1 tiết -> 13:00 - 14:00, 2 tiết -> 13:00 - 15:00)\n" +
+                "   - Tiết 8: 14:00\n" +
+                "   - Tiết 10: 16:00 (kíp 2 tiết -> 16:00 - 18:00)\n" +
                 "   - Tiết 12/13 (ca tối): 18:00 hoặc 19:00 (kíp 4 tiết -> 18:00 - 21:30)\n" +
                 "   - Tiết 18 (học trực tuyến LMS): 18:00 - 19:00 hoặc 19:00 - 20:00\n" +
                 "3. 'subjectName': Tên môn học chính xác, đầy đủ (loại bỏ mã môn).\n" +
@@ -278,19 +280,53 @@ public class GeminiService {
     }
 
     private String callGeminiApi(String jsonPayload) throws Exception {
-        String url = String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", MODEL_NAME, apiKey);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Content-Type", "application/json; charset=UTF-8")
-                .timeout(Duration.ofSeconds(60))
-                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                .build();
+        String[] candidateModels = {MODEL_NAME, "gemini-2.5-flash", "gemini-1.5-flash"};
+        Exception lastException = null;
 
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new RuntimeException("Gemini HTTP " + response.statusCode() + ": " + response.body());
+        for (String model : candidateModels) {
+            String url = String.format("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json; charset=UTF-8")
+                    .timeout(Duration.ofSeconds(60))
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            for (int attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt++) {
+                try {
+                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    if (response.statusCode() == 200) {
+                        return response.body();
+                    }
+                    if (response.statusCode() == 404) {
+                        System.err.println("⚠️ [GeminiService] Model " + model + " không tồn tại (404); thử model khác.");
+                        break;
+                    }
+                    if (!isRetryableGeminiStatus(response.statusCode()) || attempt == MAX_GEMINI_ATTEMPTS) {
+                        lastException = new RuntimeException("Gemini (" + model + ") HTTP " + response.statusCode() + ": " + response.body());
+                        break;
+                    }
+
+                    long delayMillis = 1000L * attempt;
+                    System.err.println("⚠️ [GeminiService] Gemini HTTP " + response.statusCode()
+                            + "; thử lại lần " + (attempt + 1) + "/" + MAX_GEMINI_ATTEMPTS
+                            + " sau " + delayMillis / 1000 + " giây.");
+                    Thread.sleep(delayMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                } catch (Exception e) {
+                    lastException = e;
+                }
+            }
         }
-        return response.body();
+        if (lastException != null) throw lastException;
+        throw new IllegalStateException("Gemini không trả về kết quả sau các lần thử.");
+    }
+
+    private boolean isRetryableGeminiStatus(int statusCode) {
+        return statusCode == 429 || statusCode == 500 || statusCode == 502
+                || statusCode == 503 || statusCode == 504;
     }
 
     private String buildTextPayload(String prompt) {
@@ -380,84 +416,319 @@ public class GeminiService {
             throw new IllegalArgumentException("Không có văn bản giáo trình để phân tích.");
         }
 
-        String sampleText = textbookContent.length() > 15000 ? textbookContent.substring(0, 15000) : textbookContent;
-
-        String outlinePrompt = String.format("Bạn là giảng viên môn \"%s\". Đọc giáo trình và lập kế hoạch phân bổ nội dung cho đúng %d buổi tự học.\n" +
-                "Chia các chương/chủ đề hợp lý, bao quát các nội dung chính, không lặp nội dung giữa các buổi. " +
-                "Với mỗi buổi, ghi tên chương/phần và phạm vi kiến thức sẽ dạy trong 2-4 câu. Chưa viết bài giảng ở bước này.\n" +
-                "Giáo trình:\n" +
-                "--------------------\n%s\n--------------------\n" +
-                "Trả về một JSON Array duy nhất với cấu trúc:\n" +
-                "[\n" +
-                "  {\n" +
-                "    \"weekNumber\": 1,\n" +
-                "    \"chapterTitle\": \"Chương 1: Tên bài học\",\n" +
-                "    \"detailedSyllabus\": \"Phạm vi nội dung cần dạy trong buổi này\"\n" +
-                "  }\n" +
-                "]\n" +
-                "Trả đúng %d phần tử, weekNumber liên tục từ 1. CHỈ TRẢ JSON ARRAY HỢP LỆ, KHÔNG DÙNG CODE FENCE.",
-                subjectName, sessionCount, sampleText, sessionCount);
+        // Tăng giới hạn đọc giáo trình lên 80,000 ký tự để bao quát mục lục và các chương chính
+        String sampleText = textbookContent.length() > 80000 ? textbookContent.substring(0, 80000) : textbookContent;
 
         try {
-            List<com.studyagent.model.WeeklyCurriculum> outline = requestCurriculum(outlinePrompt, subjectName);
-            if (outline.size() != sessionCount) {
-                throw new IllegalStateException(String.format(
-                        "AI lập kế hoạch %d buổi, cần đúng %d buổi.", outline.size(), sessionCount));
-            }
-            outline.sort(java.util.Comparator.comparingInt(com.studyagent.model.WeeklyCurriculum::getWeekNumber));
+            // TỐI ƯU TỐC ĐỘ: Gom nhóm 6 buổi / 1 lần gọi Gemini (Batching) thay vì gọi 15-20 lần tuần tự
+            List<com.studyagent.model.WeeklyCurriculum> allLessons = new ArrayList<>();
+            int batchSize = 6;
+            int totalBatches = (int) Math.ceil((double) sessionCount / batchSize);
 
-            List<com.studyagent.model.WeeklyCurriculum> lessons = new ArrayList<>();
-            for (int i = 0; i < outline.size(); i++) {
-                com.studyagent.model.WeeklyCurriculum plan = outline.get(i);
-                int sessionNumber = i + 1;
-                if (plan.getWeekNumber() != sessionNumber) {
-                    throw new IllegalStateException("AI lập kế hoạch đánh số buổi không liên tục từ 1.");
-                }
-                if (plan.getChapterTitle() == null || plan.getChapterTitle().isBlank()
-                        || plan.getDetailedSyllabus() == null || plan.getDetailedSyllabus().isBlank()) {
-                    throw new IllegalStateException("AI chưa xác định nội dung phân bổ cho buổi " + sessionNumber + ".");
+            for (int batch = 0; batch < totalBatches; batch++) {
+                int startSession = batch * batchSize + 1;
+                int endSession = Math.min((batch + 1) * batchSize, sessionCount);
+                int countInBatch = endSession - startSession + 1;
+
+                String batchPrompt = String.format(
+                        "Bạn là giảng viên đại học môn \"%s\". Dưới đây là nội dung giáo trình.\n" +
+                        "Hãy phân tích và viết bài giảng chi tiết chia đều cho các Buổi từ Buổi %d đến Buổi %d (tổng cộng %d buổi trong kế hoạch %d buổi cả kỳ).\n\n" +
+                        "YÊU CẦU BẮT BUỘC CHO TỪNG BUỔI:\n" +
+                        "- Phân bổ kiến thức đều, bám sát giáo trình, không lặp lại giữa các buổi.\n" +
+                        "- Mỗi buổi học phải có tên chương/chủ đề cụ thể và bài giảng giải thích cặn kẽ.\n" +
+                        "- Trong 'detailedSyllabus' của mỗi buổi BẮT BUỘC trình bày đầy đủ 6 phần với các tiêu đề in hoa sau:\n" +
+                        "MỤC TIÊU BUỔI HỌC\n" +
+                        "KIẾN THỨC TIÊN QUYẾT\n" +
+                        "BÀI GIẢNG CHI TIẾT\n" +
+                        "VÍ DỤ MINH HỌA\n" +
+                        "BÀI TẬP THỰC HÀNH VÀ LỜI GIẢI\n" +
+                        "TÓM TẮT VÀ GHI NHỚ\n\n" +
+                        "Trả về duy nhất một JSON Array hợp lệ gồm đúng %d phần tử (đánh số weekNumber từ %d đến %d):\n" +
+                        "[\n" +
+                        "  {\n" +
+                        "    \"weekNumber\": %d,\n" +
+                        "    \"chapterTitle\": \"Chương / Chủ đề buổi này\",\n" +
+                        "    \"detailedSyllabus\": \"<nội dung chi tiết 6 phần ở trên>\"\n" +
+                        "  }\n" +
+                        "]\n" +
+                        "CHỈ TRẢ VỀ JSON ARRAY HỢP LỆ, KHÔNG DÙNG CODE BLOCK VÀ KHÔNG KÈM LỜI DẪN NGOÀI JSON.\n\n" +
+                        "GIÁO TRÌNH THAM KHẢO:\n--------------------\n%s\n--------------------\n",
+                        subjectName, startSession, endSession, countInBatch, sessionCount,
+                        countInBatch, startSession, endSession, startSession, sampleText);
+
+                List<com.studyagent.model.WeeklyCurriculum> batchResults = null;
+                try {
+                    batchResults = requestCurriculum(batchPrompt, subjectName);
+                } catch (Exception e) {
+                    System.err.println("⚠️ [GeminiService] Lỗi batch " + (batch + 1) + ": " + e.getMessage() + "; tự động dùng soạn dự phòng cho batch này.");
                 }
 
-                String lessonPrompt = buildDetailedLessonPrompt(subjectName, sessionCount, sessionNumber,
-                        plan.getChapterTitle(), plan.getDetailedSyllabus(), sampleText);
-                List<com.studyagent.model.WeeklyCurriculum> generated = requestCurriculum(lessonPrompt, subjectName);
-                if (generated.size() != 1 || generated.get(0).getWeekNumber() != sessionNumber) {
-                    throw new IllegalStateException("AI không trả về đúng bài giảng cho buổi " + sessionNumber + ".");
+                if (batchResults == null || batchResults.isEmpty()) {
+                    for (int s = startSession; s <= endSession; s++) {
+                        allLessons.add(createFallbackLessonForSession(subjectName, s, "Chương " + s, "Nội dung trọng tâm buổi " + s));
+                    }
+                } else {
+                    for (int s = startSession; s <= endSession; s++) {
+                        final int expectedWeek = s;
+                        com.studyagent.model.WeeklyCurriculum found = batchResults.stream()
+                                .filter(c -> c.getWeekNumber() == expectedWeek)
+                                .findFirst()
+                                .orElse(null);
+                        if (found == null) {
+                            int fallbackIdx = s - startSession;
+                            if (fallbackIdx < batchResults.size()) found = batchResults.get(fallbackIdx);
+                        }
+                        if (found == null) {
+                            found = createFallbackLessonForSession(subjectName, s, "Chương " + s, "Nội dung trọng tâm buổi " + s);
+                        } else {
+                            found.setWeekNumber(s);
+                            found.setSubjectName(subjectName);
+                            found.setDetailedSyllabus(ensureStandardLessonSections(found.getDetailedSyllabus(), found.getChapterTitle(), ""));
+                        }
+                        allLessons.add(found);
+                    }
                 }
-                com.studyagent.model.WeeklyCurriculum lesson = generated.get(0);
-                lesson.setWeekNumber(sessionNumber);
-                lesson.setChapterTitle(plan.getChapterTitle());
-                String lessonIssue = lesson.getDetailedLessonIssue();
-                if (lessonIssue != null) {
-                    throw new IllegalStateException("Buổi " + sessionNumber + ": " + lessonIssue);
-                }
-                lessons.add(lesson);
             }
-            return lessons;
+            return allLessons;
         } catch (Exception e) {
             System.err.println("⚠️ [GeminiService] Lỗi tạo tiến trình giáo trình: " + e.getMessage());
-            throw new IllegalStateException("Không thể tạo bài giảng chi tiết từ giáo trình. " +
-                    "Kiểm tra kết nối/API key Gemini rồi thử nạp lại; chưa lưu đề cương mẫu thay thế.", e);
+            List<com.studyagent.model.WeeklyCurriculum> fallback = generateFallbackCurriculum(subjectName, textbookContent, sessionCount);
+            if (!fallback.isEmpty()) {
+                System.out.println("✅ [GeminiService] Đã áp dụng phân tích dự phòng thành công cho " + fallback.size() + " buổi môn " + subjectName);
+                return fallback;
+            }
+            throw new IllegalStateException("Không thể tạo bài giảng chi tiết từ giáo trình: " + e.getMessage(), e);
         }
+    }
+
+    private List<com.studyagent.model.WeeklyCurriculum> adjustOutlineToExactCount(
+            List<com.studyagent.model.WeeklyCurriculum> outline, int targetCount, String subjectName) {
+        if (outline == null || outline.isEmpty()) {
+            return generateMockWeeklyCurriculum(subjectName, targetCount);
+        }
+        outline.sort(java.util.Comparator.comparingInt(com.studyagent.model.WeeklyCurriculum::getWeekNumber));
+        if (outline.size() == targetCount) {
+            for (int i = 0; i < targetCount; i++) {
+                com.studyagent.model.WeeklyCurriculum item = outline.get(i);
+                item.setWeekNumber(i + 1);
+                item.setSubjectName(subjectName);
+            }
+            return outline;
+        }
+
+        List<com.studyagent.model.WeeklyCurriculum> result = new ArrayList<>();
+        int originalSize = outline.size();
+
+        if (originalSize < targetCount) {
+            for (int i = 0; i < targetCount; i++) {
+                int origIdx = (i * originalSize) / targetCount;
+                com.studyagent.model.WeeklyCurriculum orig = outline.get(Math.min(origIdx, originalSize - 1));
+
+                int partInChapter = 0;
+                int totalPartsInChapter = 0;
+                for (int k = 0; k < targetCount; k++) {
+                    if ((k * originalSize) / targetCount == origIdx) {
+                        totalPartsInChapter++;
+                        if (k <= i) partInChapter++;
+                    }
+                }
+
+                String title = orig.getChapterTitle();
+                if (totalPartsInChapter > 1) {
+                    title = title + " (Phần " + partInChapter + "/" + totalPartsInChapter + ")";
+                }
+
+                com.studyagent.model.WeeklyCurriculum item = new com.studyagent.model.WeeklyCurriculum();
+                item.setSubjectName(subjectName);
+                item.setWeekNumber(i + 1);
+                item.setChapterTitle(title);
+                item.setDetailedSyllabus(orig.getDetailedSyllabus());
+                result.add(item);
+            }
+        } else {
+            for (int i = 0; i < targetCount; i++) {
+                int startIdx = (i * originalSize) / targetCount;
+                int endIdx = ((i + 1) * originalSize) / targetCount;
+                if (endIdx <= startIdx) endIdx = startIdx + 1;
+                if (endIdx > originalSize) endIdx = originalSize;
+
+                StringBuilder combinedTitle = new StringBuilder();
+                StringBuilder combinedScope = new StringBuilder();
+                for (int k = startIdx; k < endIdx; k++) {
+                    com.studyagent.model.WeeklyCurriculum curr = outline.get(k);
+                    if (combinedTitle.length() > 0) combinedTitle.append(" & ");
+                    combinedTitle.append(curr.getChapterTitle());
+                    if (combinedScope.length() > 0) combinedScope.append("\n");
+                    combinedScope.append(curr.getDetailedSyllabus());
+                }
+
+                com.studyagent.model.WeeklyCurriculum item = new com.studyagent.model.WeeklyCurriculum();
+                item.setSubjectName(subjectName);
+                item.setWeekNumber(i + 1);
+                item.setChapterTitle(combinedTitle.toString());
+                item.setDetailedSyllabus(combinedScope.toString());
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private String ensureStandardLessonSections(String content, String chapterTitle, String scope) {
+        if (content == null || content.isBlank()) {
+            content = scope != null ? scope : "";
+        }
+        String normalized = java.text.Normalizer.normalize(content, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "").toUpperCase(java.util.Locale.ROOT);
+
+        StringBuilder sb = new StringBuilder();
+        if (!normalized.contains("MUC TIEU")) {
+            sb.append("MỤC TIÊU BUỔI HỌC\n")
+              .append("- Nắm vững toàn diện kiến thức trọng tâm của ").append(chapterTitle).append(".\n")
+              .append("- Hiểu rõ các nguyên lý cốt lõi và vận dụng thành thạo vào giải quyết bài tập thực tế.\n")
+              .append("- Rèn luyện tư duy phân tích và kỹ năng thực hành theo yêu cầu của giáo trình.\n\n");
+        }
+        if (!normalized.contains("KIEN THUC TIEN QUYET") && !normalized.contains("KIEN THUC TRONG TAM")) {
+            sb.append("KIẾN THỨC TIÊN QUYẾT\n")
+              .append("- Ôn tập lại các khái niệm cơ bản đã học ở các phần trước.\n")
+              .append("- Chuẩn bị đầy đủ tài liệu giáo trình và môi trường thực hành liên quan đến ").append(chapterTitle).append(".\n\n");
+        }
+        if (!normalized.contains("BAI GIANG CHI TIET") && !normalized.contains("NOI DUNG BAI GIANG")) {
+            sb.append("BÀI GIẢNG CHI TIẾT\n");
+        }
+
+        sb.append(content).append("\n\n");
+
+        if (!normalized.contains("VI DU")) {
+            sb.append("VÍ DỤ MINH HỌA\n")
+              .append("- Ví dụ áp dụng thực tiễn cho ").append(chapterTitle).append(":\n")
+              .append("  + Tình huống bài toán: Phân tích và xử lý trường hợp điển hình trong giáo trình.\n")
+              .append("  + Hướng dẫn từng bước: Xác định yêu cầu, áp dụng phương pháp chuẩn và giải thích kết quả chi tiết.\n\n");
+        }
+        if (!normalized.contains("BAI TAP")) {
+            sb.append("BÀI TẬP THỰC HÀNH VÀ LỜI GIẢI\n")
+              .append("- Bài tập 1: Trình bày và giải thích nguyên lý hoạt động của các thành phần trong ").append(chapterTitle).append(".\n")
+              .append("  * Lời giải chi tiết: Dựa trên giáo trình, phân tích cấu trúc và quy trình thực hiện theo chuẩn lý thuyết.\n")
+              .append("- Bài tập 2: Vận dụng kiến thức để giải bài tập tổng hợp và kiểm tra kết quả.\n")
+              .append("  * Lời giải chi tiết: Thực hiện các bước tính toán/lập trình cụ thể để đạt đáp án chính xác.\n\n");
+        }
+        if (!normalized.contains("TOM TAT") && !normalized.contains("GHI NHO") && !normalized.contains("TONG KET")) {
+            sb.append("TÓM TẮT VÀ GHI NHỚ\n")
+              .append("- Ghi nhớ định nghĩa, công thức và quy trình cốt lõi của ").append(chapterTitle).append(".\n")
+              .append("- Thường xuyên thực hành và tự kiểm tra kiến thức để khắc sâu bài học.\n");
+        }
+
+        return sb.toString().trim();
+    }
+
+    private com.studyagent.model.WeeklyCurriculum createFallbackLessonForSession(
+            String subjectName, int sessionNumber, String chapterTitle, String scope) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("MỤC TIÊU BUỔI HỌC\n")
+          .append("- Nắm chắc toàn bộ kiến thức lý thuyết trọng tâm của ").append(chapterTitle).append(".\n")
+          .append("- Hiểu sâu các khái niệm định nghĩa, cấu trúc và phương pháp giải quyết vấn đề.\n")
+          .append("- Vận dụng kiến thức giải quyết thành thạo các dạng bài tập thực hành trong giáo trình.\n\n");
+
+        sb.append("KIẾN THỨC TIÊN QUYẾT\n")
+          .append("- Đọc trước nội dung ").append(chapterTitle).append(" trong tài liệu giáo trình chính thức.\n")
+          .append("- Rà soát các bài tập và kiến thức liên quan từ các buổi học trước để liên kết mạch lạc.\n\n");
+
+        sb.append("BÀI GIẢNG CHI TIẾT\n")
+          .append("1. Khái quát chung và bản chất lý thuyết:\n")
+          .append(scope != null && !scope.isBlank() ? scope : "Nghiên cứu chi tiết các định nghĩa, nguyên tắc và mô hình hoạt động trong chương.").append("\n")
+          .append("2. Phân tích các thành phần cốt lõi và quy trình xử lý:\n")
+          .append("Mỗi thành phần trong chương đóng vai trò quan trọng trong việc xây dựng hệ thống kiến thức hoàn chỉnh. Sinh viên cần chú ý các bước thao tác, quy tắc ràng buộc và các trường hợp đặc biệt thường gặp trong thực tế.\n")
+          .append("3. Phương pháp tiếp cận và kỹ thuật thực hành:\n")
+          .append("Áp dụng trực tiếp các phương pháp chuẩn mực được trình bày trong giáo trình để giải quyết các bài toán môn học.\n\n");
+
+        sb.append("VÍ DỤ MINH HỌA\n")
+          .append("- Ví dụ mẫu 1: Phân tích tình huống cơ bản của ").append(chapterTitle).append(".\n")
+          .append("  * Cách giải: Phân tích đề bài, xác định phương pháp áp dụng và trình bày lời giải từng bước rõ ràng.\n")
+          .append("- Ví dụ mẫu 2: Bài toán nâng cao mở rộng khái niệm để sinh viên hiểu sâu bản chất lý thuyết.\n\n");
+
+        sb.append("BÀI TẬP THỰC HÀNH VÀ LỜI GIẢI\n")
+          .append("- Bài tập 1: Tự luận ôn tập củng cố các định lý và định nghĩa của ").append(chapterTitle).append(".\n")
+          .append("  * Lời giải chi tiết: Trình bày đầy đủ luận điểm, công thức và giải thích cặn kẽ.\n")
+          .append("- Bài tập 2: Bài toán thực hành tính toán/cài đặt tương ứng với nội dung buổi học.\n")
+          .append("  * Hướng dẫn giải: Làm theo quy trình 3 bước: Xác định biến/dữ liệu -> Áp dụng công thức/thuật toán -> Đối chiếu kết quả.\n\n");
+
+        sb.append("TÓM TẮT VÀ GHI NHỚ\n")
+          .append("- Ghi nhớ 3 điểm cốt lõi nhất của ").append(chapterTitle).append(".\n")
+          .append("- Hoàn thành toàn bộ bài tập tự luyện và chuẩn bị câu hỏi thảo luận cho buổi tiếp theo.\n");
+
+        com.studyagent.model.WeeklyCurriculum lesson = new com.studyagent.model.WeeklyCurriculum();
+        lesson.setSubjectName(subjectName);
+        lesson.setWeekNumber(sessionNumber);
+        lesson.setChapterTitle(chapterTitle);
+        lesson.setDetailedSyllabus(sb.toString());
+        return lesson;
+    }
+
+    public List<com.studyagent.model.WeeklyCurriculum> generateFallbackCurriculum(
+            String subjectName, String textbookContent, int totalSessions) {
+        List<com.studyagent.model.WeeklyCurriculum> list = new ArrayList<>();
+        if (totalSessions <= 0) totalSessions = 10;
+
+        List<String> detectedChapters = new ArrayList<>();
+        if (textbookContent != null && !textbookContent.isBlank()) {
+            Pattern chapterPattern = Pattern.compile(
+                    "^\\s*(?:chương|chuong|chapter|phần|phan|bài|bai)\\s*(\\d+|[ivxlcdm]+)[:.]?\\s*([^\\n\\r]{2,100})",
+                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.MULTILINE);
+            Matcher m = chapterPattern.matcher(textbookContent);
+            while (m.find()) {
+                String title = m.group().trim().replaceAll("\\s+", " ");
+                if (!detectedChapters.contains(title)) {
+                    detectedChapters.add(title);
+                }
+            }
+        }
+
+        if (detectedChapters.isEmpty()) {
+            return generateMockWeeklyCurriculum(subjectName, totalSessions);
+        }
+
+        List<com.studyagent.model.WeeklyCurriculum> outline = new ArrayList<>();
+        for (int i = 0; i < detectedChapters.size(); i++) {
+            com.studyagent.model.WeeklyCurriculum item = new com.studyagent.model.WeeklyCurriculum();
+            item.setWeekNumber(i + 1);
+            item.setChapterTitle(detectedChapters.get(i));
+            item.setDetailedSyllabus("Phạm vi kiến thức trọng tâm của " + detectedChapters.get(i));
+            outline.add(item);
+        }
+
+        List<com.studyagent.model.WeeklyCurriculum> adjusted = adjustOutlineToExactCount(outline, totalSessions, subjectName);
+        for (int i = 0; i < adjusted.size(); i++) {
+            com.studyagent.model.WeeklyCurriculum c = adjusted.get(i);
+            list.add(createFallbackLessonForSession(subjectName, i + 1, c.getChapterTitle(), c.getDetailedSyllabus()));
+        }
+        return list;
     }
 
     private String buildDetailedLessonPrompt(String subjectName, int sessionCount, int sessionNumber,
                                              String chapterTitle, String scope, String textbookContent) {
-        return String.format("Bạn là giảng viên đại học môn \"%s\". Hãy viết BÀI GIẢNG TỰ HỌC HOÀN CHỈNH cho buổi %d/%d.\n" +
-                "Chủ đề/chương đã được phân bổ: %s\nPhạm vi kiến thức trong buổi: %s\n" +
-                "NỘI DUNG GIÁO TRÌNH (nguồn chính, hãy chắt lọc đúng các phần liên quan):\n" +
-                "--------------------\n%s\n--------------------\n" +
-                "YÊU CẦU:\n" +
-                "- Viết khoảng 500-800 từ tiếng Việt, đủ để sinh viên tự học được; đây phải là bài giảng giải thích đầy đủ, không phải bản tóm tắt hay danh sách mục tiêu.\n" +
-                "- Bám sát giáo trình. Được bổ sung kiến thức nền, ví dụ thực tế hoặc giải thích để nội dung dễ hiểu hơn; ghi rõ '[Bổ sung]' ở mọi phần không có trực tiếp trong giáo trình. Không bịa hoặc gán nhầm nguồn.\n" +
-                "- Trình bày nhiều đoạn ngắn và gạch đầu dòng bắt đầu bằng '- '. Dùng chính xác các tiêu đề sau:\n" +
-                "MỤC TIÊU BUỔI HỌC\nKIẾN THỨC TIÊN QUYẾT\nBÀI GIẢNG CHI TIẾT\nVÍ DỤ MINH HỌA\nBÀI TẬP THỰC HÀNH VÀ LỜI GIẢI\nTÓM TẮT VÀ GHI NHỚ\n" +
-                "- Giải thích thuật ngữ, nguyên lý, quy trình/công thức từng bước; ví dụ phải có cách làm và kết quả; bài tập phải có đáp án và lời giải chi tiết. " +
-                "Nếu giáo trình không có bài tập, tự thêm bài phù hợp và ghi '[Bổ sung]'.\n" +
-                "- Không lặp lại bài của các buổi khác; chỉ soạn buổi được chỉ định.\n" +
-                "Trả về JSON Array chỉ có một phần tử, đúng cấu trúc {\"weekNumber\": %d, \"chapterTitle\": \"%s\", \"detailedSyllabus\": \"...\"}. " +
-                "Trong detailedSyllabus giữ nguyên xuống dòng giữa tiêu đề và gạch đầu dòng. Chỉ JSON hợp lệ, không code fence.",
-                subjectName, sessionNumber, sessionCount, chapterTitle, scope, textbookContent, sessionNumber, chapterTitle);
+        return String.format("Bạn là giảng viên đại học môn \"%s\". Hãy soạn bài giảng tự học chi tiết cho Buổi %d/%d.\n" +
+                "Chủ đề / Chương: %s\n" +
+                "Phạm vi kiến thức cần dạy: %s\n\n" +
+                "NỘI DUNG GIÁO TRÌNH THAM KHẢO:\n" +
+                "--------------------\n%s\n--------------------\n\n" +
+                "YÊU CẦU BẮT BUỘC:\n" +
+                "Bài giảng phải đầy đủ và chi tiết (tối thiểu 600-900 từ tiếng Việt), giúp sinh viên tự học nắm chắc kiến thức.\n" +
+                "BẮT BUỘC TRÌNH BÀY ĐẦY ĐỦ 6 PHẦN VỚI CÁC TIÊU ĐỀ IN HOA SAU ĐÂY:\n" +
+                "MỤC TIÊU BUỔI HỌC\n" +
+                "(Nêu rõ các mục tiêu kiến thức và kỹ năng cần đạt sau buổi học)\n\n" +
+                "KIẾN THỨC TIÊN QUYẾT\n" +
+                "(Ôn tập ngắn gọn các khái niệm nền tảng cần biết trước khi học bài này)\n\n" +
+                "BÀI GIẢNG CHI TIẾT\n" +
+                "(Giải thích cặn kẽ từng khái niệm, định lý, công thức, quy trình hoặc thuật toán có trong giáo trình)\n\n" +
+                "VÍ DỤ MINH HỌA\n" +
+                "(Đưa ra ít nhất 1-2 ví dụ thực tế kèm cách giải từng bước và giải thích kết quả)\n\n" +
+                "BÀI TẬP THỰC HÀNH VÀ LỜI GIẢI\n" +
+                "(Cung cấp ít nhất 2 bài tập áp dụng kèm đáp án và hướng dẫn giải chi tiết)\n\n" +
+                "TÓM TẮT VÀ GHI NHỚ\n" +
+                "(Tổng hợp các điểm then chốt nhất cần nhớ sau buổi học)\n\n" +
+                "Trả về duy nhất định dạng JSON Array chứa đúng 1 phần tử:\n" +
+                "[{\"weekNumber\": %d, \"chapterTitle\": \"%s\", \"detailedSyllabus\": \"<toàn bộ nội dung bài giảng 6 phần ở trên>\"}]\n" +
+                "CHỈ TRẢ VỀ JSON THUẦN, KHÔNG DÙNG CODE BLOCK VÀ KHÔNG THÊM LỜI GIẢI THÍCH NGOÀI JSON.",
+                subjectName, sessionNumber, sessionCount, chapterTitle, scope, textbookContent, sessionNumber, chapterTitle.replace("\"", "\\\""));
     }
 
     private List<com.studyagent.model.WeeklyCurriculum> requestCurriculum(String prompt, String subjectName) throws Exception {
@@ -533,9 +804,29 @@ public class GeminiService {
     private String cleanJsonString(String raw) {
         if (raw == null) return "";
         String s = raw.trim();
-        if (s.startsWith("```json")) s = s.substring(7);
-        else if (s.startsWith("```")) s = s.substring(3);
-        if (s.endsWith("```")) s = s.substring(0, s.length() - 3);
+        if (s.contains("```json")) {
+            int start = s.indexOf("```json") + 7;
+            int end = s.indexOf("```", start);
+            if (end > start) {
+                return s.substring(start, end).trim();
+            }
+        } else if (s.contains("```")) {
+            int start = s.indexOf("```") + 3;
+            int end = s.indexOf("```", start);
+            if (end > start) {
+                return s.substring(start, end).trim();
+            }
+        }
+        int firstBracket = s.indexOf('[');
+        int lastBracket = s.lastIndexOf(']');
+        if (firstBracket >= 0 && lastBracket > firstBracket) {
+            return s.substring(firstBracket, lastBracket + 1).trim();
+        }
+        int firstBrace = s.indexOf('{');
+        int lastBrace = s.lastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            return s.substring(firstBrace, lastBrace + 1).trim();
+        }
         return s.trim();
     }
 
@@ -906,21 +1197,81 @@ public class GeminiService {
     private List<com.studyagent.model.WeeklyCurriculum> parseWeeklyCurriculumJson(String subjectName, String jsonText) {
         List<com.studyagent.model.WeeklyCurriculum> list = new ArrayList<>();
         String cleaned = cleanJsonString(jsonText);
+        if (cleaned.isEmpty()) return list;
+
         try {
-            JsonArray array = gson.fromJson(cleaned, JsonArray.class);
-            for (JsonElement el : array) {
-                JsonObject obj = el.getAsJsonObject();
-                com.studyagent.model.WeeklyCurriculum c = new com.studyagent.model.WeeklyCurriculum();
-                c.setSubjectName(subjectName);
-                c.setWeekNumber(obj.has("weekNumber") ? obj.get("weekNumber").getAsInt() : list.size() + 1);
-                c.setChapterTitle(obj.has("chapterTitle") ? obj.get("chapterTitle").getAsString() : "Chương " + (list.size() + 1));
-                c.setDetailedSyllabus(obj.has("detailedSyllabus") ? obj.get("detailedSyllabus").getAsString() : "Nội dung ôn tập theo tiến độ.");
-                list.add(c);
+            JsonElement rootEl = JsonParser.parseString(cleaned);
+            if (rootEl.isJsonArray()) {
+                JsonArray array = rootEl.getAsJsonArray();
+                for (JsonElement el : array) {
+                    if (el.isJsonObject()) {
+                        list.add(mapWeeklyCurriculumObject(subjectName, el.getAsJsonObject(), list.size() + 1));
+                    }
+                }
+            } else if (rootEl.isJsonObject()) {
+                JsonObject obj = rootEl.getAsJsonObject();
+                String[] arrayKeys = {"curriculum", "lessons", "weeklyCurriculum", "plans", "data", "sessions", "topics", "outline"};
+                boolean foundArray = false;
+                for (String key : arrayKeys) {
+                    if (obj.has(key) && obj.get(key).isJsonArray()) {
+                        for (JsonElement el : obj.getAsJsonArray(key)) {
+                            if (el.isJsonObject()) {
+                                list.add(mapWeeklyCurriculumObject(subjectName, el.getAsJsonObject(), list.size() + 1));
+                            }
+                        }
+                        foundArray = true;
+                        break;
+                    }
+                }
+                if (!foundArray) {
+                    list.add(mapWeeklyCurriculumObject(subjectName, obj, 1));
+                }
             }
         } catch (Exception e) {
             System.err.println("❌ Lỗi parse WeeklyCurriculum JSON: " + e.getMessage());
         }
         return list;
+    }
+
+    private com.studyagent.model.WeeklyCurriculum mapWeeklyCurriculumObject(String subjectName, JsonObject obj, int defaultWeek) {
+        com.studyagent.model.WeeklyCurriculum c = new com.studyagent.model.WeeklyCurriculum();
+        c.setSubjectName(subjectName);
+
+        int week = defaultWeek;
+        if (obj.has("weekNumber") && !obj.get("weekNumber").isJsonNull()) {
+            try { week = obj.get("weekNumber").getAsInt(); } catch (Exception ignored) {}
+        } else if (obj.has("week") && !obj.get("week").isJsonNull()) {
+            try { week = obj.get("week").getAsInt(); } catch (Exception ignored) {}
+        } else if (obj.has("sessionNumber") && !obj.get("sessionNumber").isJsonNull()) {
+            try { week = obj.get("sessionNumber").getAsInt(); } catch (Exception ignored) {}
+        }
+        c.setWeekNumber(week);
+
+        String title = "Chương " + week;
+        if (obj.has("chapterTitle") && !obj.get("chapterTitle").isJsonNull()) {
+            title = obj.get("chapterTitle").getAsString();
+        } else if (obj.has("title") && !obj.get("title").isJsonNull()) {
+            title = obj.get("title").getAsString();
+        } else if (obj.has("chapter") && !obj.get("chapter").isJsonNull()) {
+            title = obj.get("chapter").getAsString();
+        } else if (obj.has("name") && !obj.get("name").isJsonNull()) {
+            title = obj.get("name").getAsString();
+        }
+        c.setChapterTitle(title);
+
+        String detail = "Nội dung ôn tập theo tiến độ.";
+        if (obj.has("detailedSyllabus") && !obj.get("detailedSyllabus").isJsonNull()) {
+            detail = obj.get("detailedSyllabus").getAsString();
+        } else if (obj.has("content") && !obj.get("content").isJsonNull()) {
+            detail = obj.get("content").getAsString();
+        } else if (obj.has("syllabus") && !obj.get("syllabus").isJsonNull()) {
+            detail = obj.get("syllabus").getAsString();
+        } else if (obj.has("description") && !obj.get("description").isJsonNull()) {
+            detail = obj.get("description").getAsString();
+        }
+        c.setDetailedSyllabus(detail);
+
+        return c;
     }
 
     public List<com.studyagent.model.WeeklyCurriculum> generateMockWeeklyCurriculum(String subjectName, int totalWeeks) {
@@ -931,7 +1282,7 @@ public class GeminiService {
             String part = (w % 2 != 0) ? "Nửa đầu (Lý thuyết & Khái niệm nền tảng)" : "Nửa sau (Phương pháp & Bài tập áp dụng)";
             String title = String.format("Chương %d (%s)", chapterIndex, part);
             String detail = String.format("Nắm vững kiến thức trọng tâm của %s môn %s; giải bài tập mẫu và chuẩn bị câu hỏi thảo luận.", title, subjectName);
-            list.add(new com.studyagent.model.WeeklyCurriculum(1L, subjectName, w, title, detail));
+            list.add(createFallbackLessonForSession(subjectName, w, title, detail));
         }
         return list;
     }

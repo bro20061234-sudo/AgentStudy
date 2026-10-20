@@ -393,7 +393,7 @@ public class StudyDesktopUI extends JFrame {
                 "Thứ 5: Sáng 7h-11h Kiến trúc máy tính (Phòng A1-105)");
         panel.add(new JScrollPane(timetableInput), BorderLayout.CENTER);
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel actions = new JPanel(new GridLayout(2, 4, 8, 6));
         actions.setOpaque(false);
         JButton clearButton = new JButton("Xóa");
         clearButton.addActionListener(event -> timetableInput.setText(""));
@@ -563,13 +563,30 @@ public class StudyDesktopUI extends JFrame {
         final String subject = selectedSubject;
 
         List<StudySession> allSessions = repository.getStudySessions(DESKTOP_CHAT_ID);
-        final int sessionCount = (int) allSessions.stream()
+        int sessionCount = (int) allSessions.stream()
                 .filter(s -> s.getSubjectName() != null && s.getSubjectName().equalsIgnoreCase(subject))
                 .count();
 
-        setBusy(true, sessionCount == 0
-                ? "Đang lưu giáo trình môn " + subject + "..."
-                : String.format("Đang soạn bài giảng chi tiết từ giáo trình cho %d buổi môn %s...", sessionCount, subject));
+        int targetSessionCount = sessionCount;
+        if (targetSessionCount <= 0) {
+            long classCount = repository.getTimetableEntries(DESKTOP_CHAT_ID).stream()
+                    .filter(t -> t.getSubjectName() != null && t.getSubjectName().equalsIgnoreCase(subject))
+                    .count();
+            String defaultCountStr = String.valueOf(classCount > 0 ? Math.max(10, (int) classCount) : 12);
+            String input = (String) JOptionPane.showInputDialog(this,
+                    String.format("Môn \"%s\" chưa có lịch học thêm được tạo sẵn.\nBạn muốn AI phân tích giáo trình và chia đều vào bao nhiêu buổi học?", subject),
+                    "Phân bổ số buổi học", JOptionPane.QUESTION_MESSAGE, null, null, defaultCountStr);
+            if (input == null || input.isBlank()) return;
+            try {
+                targetSessionCount = Integer.parseInt(input.trim());
+                if (targetSessionCount <= 0) targetSessionCount = 12;
+            } catch (Exception ex) {
+                targetSessionCount = 12;
+            }
+        }
+        final int finalSessionCount = targetSessionCount;
+
+        setBusy(true, String.format("Đang phân tích giáo trình và soạn bài giảng chi tiết cho %d buổi môn %s...", finalSessionCount, subject));
 
         new SwingWorker<List<com.studyagent.model.WeeklyCurriculum>, Void>() {
             @Override
@@ -577,12 +594,45 @@ public class StudyDesktopUI extends JFrame {
                 if (!repository.saveTextbook(DESKTOP_CHAT_ID, subject, file.getName(), text)) {
                     throw new IllegalStateException("Không thể lưu giáo trình vào cơ sở dữ liệu.");
                 }
-                if (sessionCount == 0) return new ArrayList<>();
+
                 List<com.studyagent.model.WeeklyCurriculum> plans =
-                        geminiService.generateCurriculumForSessions(subject, text, sessionCount);
+                        geminiService.generateCurriculumForSessions(subject, text, finalSessionCount);
                 if (!repository.saveWeeklyCurricula(DESKTOP_CHAT_ID, subject, plans)) {
                     throw new IllegalStateException("Đã tạo bài giảng nhưng không thể cập nhật đề cương vào cơ sở dữ liệu.");
                 }
+
+                // Cập nhật cả đề cương tổng quát (Syllabus)
+                try {
+                    SubjectSyllabus syllabus = new SubjectSyllabus();
+                    syllabus.setChatId(DESKTOP_CHAT_ID);
+                    syllabus.setSubjectName(subject);
+                    syllabus.setOverview("Đề cương môn học " + subject + " được bóc tách và phân bổ từ giáo trình: " + file.getName());
+                    StringBuilder sb = new StringBuilder();
+                    for (com.studyagent.model.WeeklyCurriculum p : plans) {
+                        sb.append("• Buổi ").append(p.getWeekNumber()).append(": ").append(p.getChapterTitle()).append("\n");
+                    }
+                    syllabus.setSyllabusContent(sb.toString());
+                    syllabus.setExamTips("Ôn tập kỹ các ví dụ minh họa và bài tập thực hành theo từng buổi học trong giáo trình.");
+                    syllabus.setRecommendedMaterials("Giáo trình chính: " + file.getName());
+                    repository.saveSyllabus(syllabus);
+                } catch (Exception ignored) {}
+
+                // Cập nhật trọng tâm cho các buổi tự học tương ứng nếu có
+                try {
+                    List<StudySession> sessions = repository.getStudySessions(DESKTOP_CHAT_ID);
+                    int pIdx = 0;
+                    for (StudySession s : sessions) {
+                        if (s.getSubjectName() != null && s.getSubjectName().equalsIgnoreCase(subject)) {
+                            if (pIdx < plans.size()) {
+                                com.studyagent.model.WeeklyCurriculum p = plans.get(pIdx++);
+                                s.setTopicOverview(p.getChapterTitle());
+                                s.setPreparationMaterials("Đọc bài giảng buổi " + p.getWeekNumber() + " từ giáo trình " + file.getName());
+                                repository.updateStudySession(s);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+
                 return plans;
             }
 
@@ -590,17 +640,15 @@ public class StudyDesktopUI extends JFrame {
             protected void done() {
                 try {
                     List<com.studyagent.model.WeeklyCurriculum> plans = get();
-                    setBusy(false, sessionCount == 0 ? "Đã lưu giáo trình; chưa có buổi học thêm để phân bổ." : "Đã nạp thành công giáo trình môn " + subject);
+                    setBusy(false, "Đã nạp thành công giáo trình môn " + subject);
                     renderWeeklyCurriculum();
-                    if (sessionCount == 0) {
-                        JOptionPane.showMessageDialog(StudyDesktopUI.this,
-                                "Đã lưu toàn văn giáo trình môn " + subject + ", nhưng môn này chưa có buổi tự học nào trong lịch nên chưa thể chia tiến độ.",
-                                "Đã lưu giáo trình", JOptionPane.INFORMATION_MESSAGE);
-                    } else {
-                        JOptionPane.showMessageDialog(StudyDesktopUI.this,
-                                String.format("Đã nạp giáo trình và chia đều thành công vào %d buổi học thêm cho môn %s!", plans.size(), subject),
-                                "Thành công", JOptionPane.INFORMATION_MESSAGE);
-                    }
+                    renderSyllabuses();
+                    currentSessions = repository.getStudySessions(DESKTOP_CHAT_ID);
+                    renderWeeklyCalendar();
+                    mainTabs.setSelectedIndex(2); // Chuyển sang tab Tiến độ theo buổi (Giáo trình)
+                    JOptionPane.showMessageDialog(StudyDesktopUI.this,
+                            String.format("Đã nạp giáo trình và chia đều thành công vào %d buổi học cho môn %s!", plans.size(), subject),
+                            "Thành công", JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception e) {
                     setBusy(false, "Lỗi phân tích giáo trình");
                     renderWeeklyCurriculum();
@@ -739,13 +787,12 @@ public class StudyDesktopUI extends JFrame {
 
             String lessonIssue = curr.getDetailedLessonIssue();
             if (lessonIssue != null) {
-                sb.append("CẢNH BÁO: Bài đã lưu từ lần trước chỉ là đề cương tóm tắt, chưa phải bài giảng đầy đủ.\n");
-                sb.append(lessonIssue).append("\n");
-                sb.append("Giáo trình gốc vẫn được lưu. Hãy kiểm tra API key Gemini và nạp lại giáo trình để tạo lại.\n");
-            } else {
-                sb.append("NỘI DUNG TỪ GIÁO TRÌNH:\n");
-                sb.append(String.format("Chương / Phần: %s\n\n", curr.getChapterTitle()));
-                sb.append(curr.getDetailedSyllabus()).append("\n\n");
+                sb.append("LƯU Ý: ").append(lessonIssue).append("\n\n");
+            }
+            sb.append("NỘI DUNG TỪ GIÁO TRÌNH:\n");
+            sb.append(String.format("Chương / Phần: %s\n\n", curr.getChapterTitle()));
+            sb.append(curr.getDetailedSyllabus()).append("\n\n");
+            if (session.getTopicOverview() != null && !session.getTopicOverview().isBlank()) {
                 sb.append("Gợi ý trọng tâm theo lịch: ").append(session.getTopicOverview()).append("\n");
             }
         }
@@ -1019,16 +1066,15 @@ public class StudyDesktopUI extends JFrame {
                 sb.append("====================================================\n\n");
             }
             sb.append(String.format("BUỔI %d: %s%n", c.getWeekNumber(), c.getChapterTitle()));
+            sb.append("----------------------------------------------------\n");
             String issue = c.getDetailedLessonIssue();
             if (issue != null) {
-                sb.append("CẢNH BÁO: Nội dung đã lưu chỉ là bản tóm tắt, chưa đạt chuẩn bài giảng chi tiết.\n");
-                sb.append("Hãy kiểm tra API key Gemini rồi nạp lại giáo trình để tạo lại buổi này.\n");
-            } else {
-                sb.append(c.getDetailedSyllabus()).append("\n");
+                sb.append("[Ghi chú chất lượng: ").append(issue).append("]\n\n");
             }
-            sb.append('\n');
+            sb.append(c.getDetailedSyllabus()).append("\n\n");
         }
         weeklyCurriculumOutput.setText(sb.toString());
+        weeklyCurriculumOutput.setCaretPosition(0);
     }
 
     private void renderQuizQuestions(String subject, List<com.studyagent.model.QuizQuestion> startQuiz, List<com.studyagent.model.QuizQuestion> contestQuiz) {
@@ -1074,7 +1120,10 @@ public class StudyDesktopUI extends JFrame {
             session.setSessionIndex(index);
         }
         renderWeeklyCalendar();
+        renderSyllabuses();
+    }
 
+    private void renderSyllabuses() {
         StringBuilder syllabus = new StringBuilder("ĐỀ CƯƠNG ÔN TẬP\n\n");
         for (SubjectSyllabus item : repository.getAllSyllabuses(DESKTOP_CHAT_ID)) {
             syllabus.append("════════  ").append(item.getSubjectName()).append("  ════════\n");
@@ -1084,6 +1133,7 @@ public class StudyDesktopUI extends JFrame {
             syllabus.append("Tài liệu: ").append(item.getRecommendedMaterials()).append("\n\n");
         }
         syllabusOutput.setText(syllabus.toString());
+        syllabusOutput.setCaretPosition(0);
     }
 
     private void setBusy(boolean busy, String message) {

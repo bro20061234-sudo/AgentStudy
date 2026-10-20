@@ -4,10 +4,13 @@ C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyage
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\bot\TelegramBotClient.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\ConfigLoader.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\Main.java
+C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\model\QuizQuestion.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\model\StudySession.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\model\SubjectSyllabus.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\model\TimetableEntry.java
+C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\model\WeeklyCurriculum.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\parser\AIParser.java
+C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\parser\DocumentParser.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\parser\GeminiAIParser.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\parser\RegexAIParser.java
 C:\Users\Dell\.gemini\antigravity\scratch\study-agent\src\main\java\com\studyagent\parser\StudyRequest.java

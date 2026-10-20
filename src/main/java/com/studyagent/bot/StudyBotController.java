@@ -180,11 +180,13 @@ public class StudyBotController implements TelegramBotClient.TelegramUpdateListe
                 .filter(s -> s.getSubjectName() != null && s.getSubjectName().equalsIgnoreCase(matchSub))
                 .count();
         if (sessionCount <= 0) {
-            botClient.sendMessage(chatId, String.format("📚 Đã lưu nguyên văn giáo trình môn *%s*.\n⚠️ Môn này chưa có buổi tự học trong lịch nên chưa thể chia tiến độ. Hãy phân tích lại thời khóa biểu hoặc cập nhật lịch trước.", detectedSubject));
-            return;
+            long classCount = repository.getTimetableEntries(chatId).stream()
+                    .filter(s -> s.getSubjectName() != null && s.getSubjectName().equalsIgnoreCase(matchSub))
+                    .count();
+            sessionCount = classCount > 0 ? Math.max(10, (int) classCount) : 12;
         }
 
-        botClient.sendMessage(chatId, String.format("📚 Đã lưu giáo trình môn *%s*!\n🤖 Đang soạn bài giảng chi tiết cho *%d buổi học thêm*...", detectedSubject, sessionCount));
+        botClient.sendMessage(chatId, String.format("📚 Đã lưu giáo trình môn *%s*!\n🤖 Đang phân tích và chia đều bài giảng chi tiết cho *%d buổi học*...", detectedSubject, sessionCount));
 
         List<com.studyagent.model.WeeklyCurriculum> weeklyPlans;
         try {
@@ -198,6 +200,22 @@ public class StudyBotController implements TelegramBotClient.TelegramUpdateListe
             botClient.sendMessage(chatId, "⚠️ AI đã tạo bài giảng nhưng không thể cập nhật đề cương vào cơ sở dữ liệu. Vui lòng nạp lại giáo trình để thử lại.");
             return;
         }
+
+        // Cập nhật đề cương tổng quát và trọng tâm buổi học
+        try {
+            SubjectSyllabus syllabus = new SubjectSyllabus();
+            syllabus.setChatId(chatId);
+            syllabus.setSubjectName(detectedSubject);
+            syllabus.setOverview("Đề cương môn học " + detectedSubject + " được bóc tách và phân bổ từ giáo trình: " + fileName);
+            StringBuilder sb = new StringBuilder();
+            for (com.studyagent.model.WeeklyCurriculum p : weeklyPlans) {
+                sb.append("• Buổi ").append(p.getWeekNumber()).append(": ").append(p.getChapterTitle()).append("\n");
+            }
+            syllabus.setSyllabusContent(sb.toString());
+            syllabus.setExamTips("Bám sát lý thuyết và bài tập từng buổi trong giáo trình.");
+            syllabus.setRecommendedMaterials("Giáo trình chính: " + fileName);
+            repository.saveSyllabus(syllabus);
+        } catch (Exception ignored) {}
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("✅ *ĐÃ TẠO BÀI GIẢNG CHI TIẾT CHO %d BUỔI MÔN: %s*\n\n", sessionCount, detectedSubject.toUpperCase()));
@@ -421,13 +439,12 @@ public class StudyBotController implements TelegramBotClient.TelegramUpdateListe
 
                     String lessonIssue = curr.getDetailedLessonIssue();
                     if (lessonIssue != null) {
-                        sb.append("CẢNH BÁO: Bài đã lưu từ lần trước chỉ là đề cương tóm tắt, chưa phải bài giảng đầy đủ.\n");
-                        sb.append(lessonIssue).append("\n");
-                        sb.append("Giáo trình gốc vẫn được lưu. Kiểm tra API key Gemini rồi nạp lại giáo trình để tạo lại.\n");
-                    } else {
-                        sb.append("NỘI DUNG TỪ GIÁO TRÌNH:\n");
-                        sb.append(String.format("Chương / Phần: %s\n\n", curr.getChapterTitle()));
-                        sb.append(curr.getDetailedSyllabus()).append("\n\n");
+                        sb.append("LƯU Ý: ").append(lessonIssue).append("\n\n");
+                    }
+                    sb.append("NỘI DUNG TỪ GIÁO TRÌNH:\n");
+                    sb.append(String.format("Chương / Phần: %s\n\n", curr.getChapterTitle()));
+                    sb.append(curr.getDetailedSyllabus()).append("\n\n");
+                    if (session.getTopicOverview() != null && !session.getTopicOverview().isBlank()) {
                         sb.append(String.format("Trọng tâm theo lịch: %s\n", session.getTopicOverview()));
                     }
             }

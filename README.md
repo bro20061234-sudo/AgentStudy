@@ -112,4 +112,12 @@ javac -encoding UTF-8 -d bin src/main/java/com/studyagent/**/*.java src/main/jav
 # Chạy chương trình
 java -cp bin com.studyagent.Main
 ```
+
+### Cấu hình Gemini API
+
+Đặt khóa trong biến môi trường `GEMINI_API_KEY` (ưu tiên) hoặc trong
+`config.properties` với thuộc tính `gemini.api.key`. Ứng dụng tìm file cấu hình
+trong thư mục chạy và thư mục ứng dụng; khi chạy từ IDE, hãy đảm bảo cấu hình ở
+một trong hai vị trí này. Không đưa khóa API thật lên Git hoặc chia sẻ trong ảnh,
+log hay tin nhắn.
 #
