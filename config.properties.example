@@ -1,0 +1,2 @@
+# Sao chép thành config.properties và điền Gemini API key trên máy của bạn.
+gemini.api.key=YOUR_GEMINI_API_KEY

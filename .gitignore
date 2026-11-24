@@ -1,0 +1,11 @@
+/target/
+/bin/
+/lib/
+/dist/
+/Ungdung/
+/data/
+/config.properties
+/*.db
+/*.db-*
+*.log
+/.vscode/

@@ -14,7 +14,7 @@ public class ConfigLoader {
     }
 
     private static void loadConfig() {
-        File file = new File(CONFIG_FILE);
+        File file = AppPaths.resolve(CONFIG_FILE).toFile();
         if (file.exists()) {
             try (InputStream in = new FileInputStream(file)) {
                 properties.load(in);
@@ -24,15 +24,23 @@ public class ConfigLoader {
         }
     }
 
-    public static String getTelegramBotToken() {
-        String env = System.getenv("TELEGRAM_BOT_TOKEN");
-        if (env != null && !env.isBlank()) return env.trim();
-        return properties.getProperty("telegram.bot.token", "YOUR_TELEGRAM_BOT_TOKEN").trim();
-    }
-
     public static String getGeminiApiKey() {
         String env = System.getenv("GEMINI_API_KEY");
-        if (env != null && !env.isBlank()) return env.trim();
-        return properties.getProperty("gemini.api.key", "YOUR_GEMINI_API_KEY").trim();
+        if (env != null && !env.isBlank()) return sanitizeKey(env);
+        return sanitizeKey(properties.getProperty("gemini.api.key", "YOUR_GEMINI_API_KEY"));
+    }
+
+    /** Bỏ BOM, dấu ngoặc, khoảng trắng thừa khi copy key từ AI Studio. */
+    private static String sanitizeKey(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        // UTF-8 BOM
+        if (!s.isEmpty() && s.charAt(0) == '\uFEFF') {
+            s = s.substring(1).trim();
+        }
+        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+            s = s.substring(1, s.length() - 1).trim();
+        }
+        return s;
     }
 }
